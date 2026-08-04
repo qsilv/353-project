@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
@@ -114,6 +114,7 @@ def main():
         
         # loop through each feature selection method
         for method in FEATURE_METHODS:
+            print(f"  -> {method.upper()} features:")
             
             # prepare subject-dependent data
             X_train_dep = subject_data[f'X_train_{method}']
@@ -132,14 +133,12 @@ def main():
             # loop through each machine learning model
             models = get_models()
             for model_name, model in models.items():
+                print(f"       Training {model_name}...", end='', flush=True)
                 
                 # --- a. subject-dependent evaluation ---
                 
                 # step 1 & 2: scale the data and train the model using a pipeline
-                clf_dep = Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('classifier', model)
-                ])
+                clf_dep = make_pipeline(StandardScaler(), model)
                 
                 t0 = time.time()
                 clf_dep.fit(X_train_dep, y_train_dep)
@@ -175,10 +174,7 @@ def main():
                 fresh_model = get_models()[model_name]
                 
                 # step 1 & 2: scale and train
-                clf_cross = Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('classifier', fresh_model)
-                ])
+                clf_cross = make_pipeline(StandardScaler(), fresh_model)
                 
                 t0 = time.time()
                 clf_cross.fit(X_train_cross, y_train_cross)
@@ -207,6 +203,8 @@ def main():
                 if model_name == 'SVM' and method == 'pca':
                     matrix = confusion_matrix(y_test_cross, predictions_cross)
                     saved_matrices[f"{test_subject}_cross"] = matrix
+                    
+                print(" done")
 
     # 3. save all results
     results_df = pd.DataFrame(results_list)

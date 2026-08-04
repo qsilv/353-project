@@ -19,7 +19,7 @@ PROCESSED_FOLDER = 'processed_data'
 
 # make the charts look nice
 plt.style.use('seaborn-v0_8-whitegrid')
-sns.set_context("paper", font_scale=1.2)
+sns.set_context("paper", font_scale=1.4)
 
 
 # --- plotting functions ---
@@ -43,20 +43,25 @@ def draw_accuracy_chart():
         hue='Method',
         col='Scenario',
         palette='viridis',
-        height=6,
-        aspect=1.2
+        height=7,
+        aspect=1.4
     )
     
-    chart.fig.suptitle('Model Accuracy Comparison', fontsize=16, y=1.05)
+    chart.fig.suptitle('Model Accuracy Comparison', fontsize=18, y=1.02)
     chart.set_axis_labels("Machine Learning Model", "Average Accuracy")
     
-    # make the y-axis go from 0 to 100% (0.0 to 1.0)
+    # make the y-axis start at 0.4 so the differences are visible
     for axis in chart.axes.flat:
-        axis.set_ylim(0, 1.05)
+        axis.set_ylim(0.4, 0.7)
         # draw a red line at 50% to show what random guessing looks like
-        axis.axhline(y=0.5, color='r', linestyle='--', alpha=0.5, label='Random Guessing (50%)')
+        axis.axhline(y=0.5, color='r', linestyle='--', alpha=0.5)
+        axis.tick_params(axis='x', labelsize=11)
+    
+    # make the legend text bigger
+    chart._legend.set_title('Feature Method')
+    plt.setp(chart._legend.get_texts(), fontsize=11)
+    plt.setp(chart._legend.get_title(), fontsize=12)
         
-    plt.tight_layout()
     output_path = os.path.join(FIGURES_FOLDER, 'accuracy_chart.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -123,58 +128,6 @@ def draw_confusion_matrices():
     print("Saved confusion matrix!")
 
 
-def draw_brainwaves():
-    """draws a picture of the raw brainwaves and their frequencies."""
-    # find the first subject's file just as an example
-    all_files = os.listdir(PROCESSED_FOLDER)
-    subject_files = [f for f in all_files if f.endswith('.npz') and not 'features' in f]
-    
-    if len(subject_files) == 0:
-        return
-        
-    example_file = subject_files[0]
-    data = np.load(os.path.join(PROCESSED_FOLDER, example_file))
-    
-    windows = data['X_train']
-    labels = data['y_train']
-    sampling_rate = int(data['fs'])
-    
-    # i'll just look at the 'fz' channel (which is index 1 in my list of 7)
-    channel_index = 1 
-    
-    # find one focused window and one unfocused window
-    focused_window_index = -1
-    unfocused_window_index = -1
-    
-    for i in range(len(labels)):
-        if labels[i] == 1 and focused_window_index == -1:
-            focused_window_index = i
-        if labels[i] == 0 and unfocused_window_index == -1:
-            unfocused_window_index = i
-            
-    focused_wave = windows[focused_window_index, :, channel_index]
-    unfocused_wave = windows[unfocused_window_index, :, channel_index]
-    
-    time_axis = np.arange(len(focused_wave)) / sampling_rate
-    
-    # --- plot 1: draw the raw squiggly lines ---
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True, sharey=True)
-    
-    ax1.plot(time_axis, unfocused_wave, color='blue')
-    ax1.set_title('Raw Brainwaves (Unfocused) - Channel Fz')
-    ax1.set_ylabel('Voltage')
-    
-    ax2.plot(time_axis, focused_wave, color='orange')
-    ax2.set_title('Raw Brainwaves (Focused) - Channel Fz')
-    ax2.set_xlabel('Time (seconds)')
-    ax2.set_ylabel('Voltage')
-    
-    plt.tight_layout()
-    output_path1 = os.path.join(FIGURES_FOLDER, 'raw_brainwaves.png')
-    plt.savefig(output_path1, dpi=300)
-    plt.close()
-    print("Saved raw brainwaves plot!")
-
 
 # --- main process ---
 
@@ -186,7 +139,6 @@ def main():
         
     draw_accuracy_chart()
     draw_confusion_matrices()
-    draw_brainwaves()
     
     print("All done!")
 

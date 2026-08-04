@@ -1,330 +1,229 @@
 """
-data_processing.py - Step 1: Raw EEG Data Processing
+data_processing.py - step 1: raw eeg data processing
 
-Reads raw .txt EEG files from the MEMA For_graph directory,
-selects 7 channels, downsamples to 125 Hz, applies bandpass
-filtering, segments into 1-second windows, and saves processed
-data as .npz files.
+this script reads the raw .txt files, picks the 7 channels we need, 
+downsamples the data to 125 hz (so it matches the neuropawn headset), 
+filters out noise, and cuts it into 1-second chunks.
 
-Usage: python data_processing.py
+we save the data into .npz files so it's easy to load for the next step.
 """
 
 import os
+import time
 import numpy as np
 import pandas as pd
 from scipy import signal
-import time
 
-# ============================================================
-# Configuration
-# ============================================================
+# --- settings ---
+DATA_FOLDER = 'MEMA Dataset/MEMA/For_graph'
+OUTPUT_FOLDER = 'processed_data'
 
-# Path to the For_graph directory containing raw .txt trial files
-DATA_DIR = os.path.join('MEMA Dataset', 'MEMA', 'For_graph')
+# we are dropping the sampling rate from 500 hz to 125 hz
+ORIGINAL_HZ = 500
+TARGET_HZ = 125
+DOWNSAMPLE_FACTOR = 4
 
-# Output directory for processed data
-OUTPUT_DIR = 'processed_data'
-
-# Original and target sampling rates
-FS_ORIGINAL = 500   # Hz (MEMA dataset recorded at 500 Hz)
-FS_TARGET = 125     # Hz (NeuroPawn headset rate)
-DOWNSAMPLE_FACTOR = FS_ORIGINAL // FS_TARGET  # = 4
-
-# 7 channels used in Papers 1 & 3 (Aci et al., Wang & Kim)
-# Column indices in the 32-column .txt files
-CHANNEL_COLS = [2, 3, 4, 12, 13, 14, 23]
+# the 7 channels we are using based on the research papers
+CHANNEL_COLUMNS = [2, 3, 4, 12, 13, 14, 23]
 CHANNEL_NAMES = ['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz']
 
-# Window size for segmentation (1 second at target rate)
-WINDOW_SIZE = FS_TARGET  # 125 samples = 1 second
+# a 1-second window at 125 hz means 125 samples
+SAMPLES_PER_WINDOW = 125
 
-# Bandpass filter parameters
-FILTER_LOW = 0.5    # Hz
-FILTER_HIGH = 45.0  # Hz
-FILTER_ORDER = 4
+# --- helper functions ---
 
-# Binary label mapping from filename
-# _a = concentrating = focused (1)
-# _n = neutral = unfocused (0)
-# _r = relaxing = unfocused (0)
-LABEL_MAP = {'a': 1, 'n': 0, 'r': 0}
-
-# Train/test split: rounds 1-3 for training, round 4 for testing
-TRAIN_ROUNDS = ['1', '2', '3']
-TEST_ROUNDS = ['4']
-
-
-# ============================================================
-# Helper Functions
-# ============================================================
-
-def load_trial_txt(filepath):
+def downsample_data(raw_eeg_data):
     """
-    Load a single trial .txt file and select the 7 target channels.
-    
-    The .txt files are comma-separated with no header, 32 columns,
-    one row per time point at 500 Hz.
-    
-    Returns:
-        numpy array of shape (n_samples, 7)
+    makes the data smaller (125 hz instead of 500 hz).
+    we use scipy's decimate function because it automatically 
+    applies a filter to stop aliasing (weird artifacts).
     """
-    # Use usecols to only read the 7 channels we need (much faster)
-    df = pd.read_csv(filepath, header=None, usecols=CHANNEL_COLS)
+    num_samples = raw_eeg_data.shape[0] #number of rows (time points)
+    num_channels = raw_eeg_data.shape[1] #number of columns (channels)
+    new_num_samples = num_samples // DOWNSAMPLE_FACTOR #how many rows new data will have
     
-    # Reorder columns to match our CHANNEL_NAMES order
-    # pd.read_csv with usecols preserves original column indices
-    df.columns = CHANNEL_NAMES
+    #new empty array to store smaller data
+    smaller_data = np.zeros((new_num_samples, num_channels))
     
-    return df.values
+    # process one channel at a time
+    for channel_index in range(num_channels):
+        channel_data = raw_eeg_data[:, channel_index] #all rows, selected channel column
+        #applies a low pass filter to prevent aliasing then downsamples by the factor
+        #https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.decimate.html
+        smaller_data[:, channel_index] = signal.decimate(channel_data, DOWNSAMPLE_FACTOR)
+        
+    return smaller_data
 
 
-def downsample(data, factor):
+def filter_data(eeg_data):
     """
-    Downsample EEG data by the given factor with anti-aliasing.
-    
-    Uses scipy.signal.decimate which applies a low-pass filter
-    before downsampling to prevent aliasing.
-    
-    Args:
-        data: numpy array of shape (n_samples, n_channels)
-        factor: integer downsample factor (e.g., 4 for 500->125 Hz)
-    
-    Returns:
-        numpy array of shape (n_samples // factor, n_channels)
+    removes low-frequency drift and high-frequency noise.
+    we keep frequencies between 0.5 hz and 45.0 hz.
+
+    why: less than 0.5hz is slow muscle movements (artifacts) and higher than 45hz is noise
     """
-    # decimate works along axis=0 by default, apply per channel
-    downsampled = np.zeros((data.shape[0] // factor, data.shape[1]))
-    for ch in range(data.shape[1]):
-        downsampled[:, ch] = signal.decimate(data[:, ch], factor)
-    return downsampled
+    # create a butterworth bandpass filter
+    #nyquist theorem: the highest frequency we can detect is half the sampling rate (learned this in CMPT 365)
+    nyquist_freq = TARGET_HZ / 2.0
+    low_cutoff = 0.5 / nyquist_freq #filters want normalized frequencies between 0 and 1
+    high_cutoff = 45.0 / nyquist_freq 
+    
+    b, a = signal.butter(4, [low_cutoff, high_cutoff], btype='band')
+    
+    filtered_data = np.zeros_like(eeg_data)
+    
+    # filter one channel at a time
+    for channel_index in range(eeg_data.shape[1]):
+        channel_data = eeg_data[:, channel_index]
+        filtered_data[:, channel_index] = signal.filtfilt(b, a, channel_data)
+        
+    return filtered_data
 
 
-def bandpass_filter(data, lowcut, highcut, fs, order):
+def cut_into_windows(eeg_data):
     """
-    Apply a Butterworth bandpass filter to EEG data.
-    
-    Removes DC drift (below lowcut) and high-frequency noise
-    (above highcut). Uses filtfilt for zero-phase filtering.
-    
-    Args:
-        data: numpy array of shape (n_samples, n_channels)
-        lowcut: low frequency cutoff in Hz
-        highcut: high frequency cutoff in Hz
-        fs: sampling rate in Hz
-        order: filter order
-    
-    Returns:
-        filtered data, same shape as input
+    cuts the continuous eeg data into 1 second chunks.
+    drops any leftover data at the end that doesn't fit into a full second.
     """
-    # Design Butterworth bandpass filter
-    nyquist = fs / 2.0
-    low = lowcut / nyquist
-    high = highcut / nyquist
-    b, a = signal.butter(order, [low, high], btype='band')
+    num_samples = eeg_data.shape[0]
+    num_channels = eeg_data.shape[1]
     
-    # Apply zero-phase filtering to each channel
-    filtered = np.zeros_like(data)
-    for ch in range(data.shape[1]):
-        filtered[:, ch] = signal.filtfilt(b, a, data[:, ch])
+    num_full_windows = num_samples // SAMPLES_PER_WINDOW
     
-    return filtered
-
-
-def segment_into_windows(data, window_size):
-    """
-    Split continuous EEG data into non-overlapping fixed-size windows.
+    # cut off the extra samples at the end
+    total_samples_to_keep = num_full_windows * SAMPLES_PER_WINDOW
+    trimmed_data = eeg_data[0:total_samples_to_keep, :]
     
-    Any leftover samples that don't fill a complete window are dropped.
-    
-    Args:
-        data: numpy array of shape (n_samples, n_channels)
-        window_size: number of samples per window
-    
-    Returns:
-        numpy array of shape (n_windows, window_size, n_channels)
-    """
-    n_samples = data.shape[0]
-    n_windows = n_samples // window_size
-    
-    # Trim to exact multiple of window_size
-    trimmed = data[:n_windows * window_size, :]
-    
-    # Reshape into windows
-    windows = trimmed.reshape(n_windows, window_size, data.shape[1])
+    # reshape it so it is (windows, 125, 7)
+    windows = trimmed_data.reshape(num_full_windows, SAMPLES_PER_WINDOW, num_channels)
     
     return windows
 
 
-def parse_trial_filename(filename):
+def get_label_from_filename(filename):
     """
-    Extract the attention state and round number from a trial filename.
-    
-    Filenames follow the pattern: SubjectN_X#.txt
-    where X is the state letter (a/n/r) and # is the round (1-4).
-    
-    Examples:
-        Subject1_a1.txt -> state='a', round='1'
-        Subject3_r4.txt -> state='r', round='4'
-    
-    Returns:
-        (state_letter, round_number) or (None, None) if not a trial file
+    looks at the filename to figure out if the person was focused or not.
+    _a means concentrating (focused = 1)
+    _n means neutral (unfocused = 0)
+    _r means relaxing (unfocused = 0)
+
+    this is based on the dataset description on the repository
     """
-    # Remove extension
-    name = os.path.splitext(filename)[0]
-    
-    # The trial part is after the last underscore
-    parts = name.rsplit('_', 1)
-    if len(parts) != 2:
-        return None, None
-    
-    trial_code = parts[1]
-    
-    # Trial code should be like 'a1', 'n3', 'r4'
-    if len(trial_code) < 2:
-        return None, None
-    
-    state = trial_code[0]
-    round_num = trial_code[1:]
-    
-    if state not in LABEL_MAP:
-        return None, None
-    
-    return state, round_num
+    if '_a' in filename:
+        return 1, 'focused'
+    elif '_n' in filename or '_r' in filename:
+        return 0, 'unfocused'
+    else:
+        return -1, 'unknown'
 
 
-def process_subject(subject_dir, subject_name):
+def get_round_from_filename(filename):
     """
-    Process all trial files for a single subject.
-    
-    Reads each trial .txt file, downsamples, filters, segments
-    into 1-second windows, assigns binary labels, and splits
-    into train/test sets.
-    
-    Args:
-        subject_dir: path to the subject's directory
-        subject_name: string like 'Subject1'
-    
-    Returns:
-        dict with X_train, y_train, X_test, y_test arrays
+    finds out which round of the experiment this file is from.
+    rounds 1, 2, and 3 are for training. round 4 is for testing.
     """
-    train_windows = []
-    train_labels = []
-    test_windows = []
-    test_labels = []
-    
-    # Find all .txt trial files
-    txt_files = sorted([f for f in os.listdir(subject_dir) if f.endswith('.txt')])
-    
-    for txt_file in txt_files:
-        state, round_num = parse_trial_filename(txt_file)
-        if state is None:
-            continue  # Skip non-trial files
-        
-        filepath = os.path.join(subject_dir, txt_file)
-        
-        # Step 1: Load raw data (7 channels only)
-        raw_data = load_trial_txt(filepath)
-        
-        # Step 2: Downsample 500 Hz -> 125 Hz
-        downsampled = downsample(raw_data, DOWNSAMPLE_FACTOR)
-        
-        # Step 3: Bandpass filter (0.5-45 Hz)
-        filtered = bandpass_filter(downsampled, FILTER_LOW, FILTER_HIGH,
-                                   FS_TARGET, FILTER_ORDER)
-        
-        # Step 4: Segment into 1-second windows
-        windows = segment_into_windows(filtered, WINDOW_SIZE)
-        
-        # Step 5: Assign binary label
-        label = LABEL_MAP[state]
-        labels = np.full(windows.shape[0], label, dtype=np.int32)
-        
-        # Step 6: Split into train or test
-        if round_num in TRAIN_ROUNDS:
-            train_windows.append(windows)
-            train_labels.append(labels)
-        elif round_num in TEST_ROUNDS:
-            test_windows.append(windows)
-            test_labels.append(labels)
-    
-    # Combine all windows for this subject
-    result = {
-        'X_train': np.concatenate(train_windows, axis=0),
-        'y_train': np.concatenate(train_labels, axis=0),
-        'X_test': np.concatenate(test_windows, axis=0),
-        'y_test': np.concatenate(test_labels, axis=0),
-        'channel_names': np.array(CHANNEL_NAMES),
-        'fs': FS_TARGET,
-    }
-    
-    return result
+    if '1.txt' in filename or '2.txt' in filename or '3.txt' in filename:
+        return 'train'
+    elif '4.txt' in filename:
+        return 'test'
+    else:
+        return 'unknown'
 
 
-# ============================================================
-# Main Processing Pipeline
-# ============================================================
+# --- main process ---
 
 def main():
-    """Process all subjects and save as .npz files."""
+    print("Starting data processing")
     
-    print("=" * 60)
-    print("EEG Data Processing Pipeline")
-    print(f"  Source: {DATA_DIR}")
-    print(f"  Channels: {CHANNEL_NAMES} (7 of 32)")
-    print(f"  Downsample: {FS_ORIGINAL} Hz -> {FS_TARGET} Hz")
-    print(f"  Filter: {FILTER_LOW}-{FILTER_HIGH} Hz bandpass")
-    print(f"  Window: {WINDOW_SIZE} samples = 1 second")
-    print(f"  Labels: focused (1) vs unfocused (0)")
-    print("=" * 60)
-    
-    # Create output directory
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    # Find all subject directories
-    subject_dirs = sorted([
-        d for d in os.listdir(DATA_DIR) 
-        if os.path.isdir(os.path.join(DATA_DIR, d)) and d.startswith('Subject')
-    ])
-    
-    print(f"\nFound {len(subject_dirs)} subjects")
-    
-    total_start = time.time()
-    
-    for i, subject_name in enumerate(subject_dirs):
-        subject_dir = os.path.join(DATA_DIR, subject_name)
-        start = time.time()
+    # create the output folder if it doesn't exist
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER)
         
-        print(f"\n[{i+1}/{len(subject_dirs)}] Processing {subject_name}...", end=' ')
-        
-        try:
-            result = process_subject(subject_dir, subject_name)
+    # get a list of all subjects (subject1, subject2, etc.)
+    all_items_in_folder = os.listdir(DATA_FOLDER)
+    subject_folders = []
+    for item in all_items_in_folder:
+        if 'Subject' in item:
+            subject_folders.append(item)
             
-            # Save processed data
-            output_path = os.path.join(OUTPUT_DIR, f'{subject_name}.npz')
-            np.savez_compressed(output_path, **result)
-            
-            elapsed = time.time() - start
-            
-            # Print summary
-            n_train = result['X_train'].shape[0]
-            n_test = result['X_test'].shape[0]
-            train_pos = result['y_train'].sum()
-            test_pos = result['y_test'].sum()
-            print(f"done ({elapsed:.1f}s)")
-            print(f"    Train: {n_train} windows "
-                  f"({train_pos} focused, {n_train - train_pos} unfocused)")
-            print(f"    Test:  {n_test} windows "
-                  f"({test_pos} focused, {n_test - test_pos} unfocused)")
-            
-        except Exception as e:
-            print(f"ERROR: {e}")
+    print(f"Found {len(subject_folders)} subjects to process.")
     
-    total_elapsed = time.time() - total_start
-    print(f"\n{'=' * 60}")
-    print(f"All subjects processed in {total_elapsed:.1f}s")
-    print(f"Output saved to: {OUTPUT_DIR}/")
-    print(f"{'=' * 60}")
-
+    start_time = time.time()
+    
+    # process each subject one by one
+    for subject in subject_folders:
+        print(f"Working on {subject}")
+        
+        subject_path = os.path.join(DATA_FOLDER, subject)
+        txt_files = os.listdir(subject_path)
+        
+        # lists to hold the data for this subject
+        train_windows_list = []
+        train_labels_list = []
+        test_windows_list = []
+        test_labels_list = []
+        
+        for file in txt_files:
+            # skip files that aren't .txt
+            if not file.endswith('.txt'):
+                continue
+                
+            file_path = os.path.join(subject_path, file)
+            
+            # figure out the label and if it's train or test
+            label_number, label_name = get_label_from_filename(file)
+            dataset_type = get_round_from_filename(file)
+            
+            if label_number == -1 or dataset_type == 'unknown':
+                continue
+                
+            # 1. read the raw data using pandas (only the 7 columns we need)
+            df = pd.read_csv(file_path, header=None, usecols=CHANNEL_COLUMNS)
+            raw_data = df.values
+            
+            # 2. downsample
+            smaller_data = downsample_data(raw_data)
+            
+            # 3. filter
+            clean_data = filter_data(smaller_data)
+            
+            # 4. cut into windows
+            windows = cut_into_windows(clean_data)
+            
+            # create a label for each window (focused/unfocused)
+            num_windows = windows.shape[0]
+            labels = np.zeros(num_windows, dtype=int)
+            for i in range(num_windows):
+                labels[i] = label_number
+                
+            # put them in the right list
+            if dataset_type == 'train':
+                train_windows_list.append(windows)
+                train_labels_list.append(labels)
+            elif dataset_type == 'test':
+                test_windows_list.append(windows)
+                test_labels_list.append(labels)
+                
+        # combine all the lists into big numpy arrays
+        X_train = np.concatenate(train_windows_list, axis=0)
+        y_train = np.concatenate(train_labels_list, axis=0)
+        X_test = np.concatenate(test_windows_list, axis=0)
+        y_test = np.concatenate(test_labels_list, axis=0)
+        
+        # save the arrays to a file so they can be used later
+        output_file = os.path.join(OUTPUT_FOLDER, f"{subject}.npz")
+        np.savez_compressed(
+            output_file,
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            channel_names=CHANNEL_NAMES,
+            fs=TARGET_HZ
+        )
+        
+    end_time = time.time()
+    print(f"Finished processing everything in {end_time - start_time:.1f} seconds")
 
 if __name__ == '__main__':
     main()

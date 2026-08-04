@@ -1,292 +1,284 @@
 """
-feature_extraction.py - Step 2: Extract EEG Features
+feature_extraction.py - step 2: extract eeg features
 
-Loads the processed EEG windows (from Step 1) and extracts:
-- Band powers (Delta, Theta, Alpha, Beta, Gamma)
-- Band power ratios
-- Statistical features (mean, std, skewness, kurtosis)
-
-Applies various feature selection methods (ANOVA, Feature Importance,
-Linear Correlation, PCA) and saves the resulting feature matrices.
-
-Usage: python feature_extraction.py
+this script takes the processed 1-second chunks and calculates mathematical 
+features from them (like band powers, averages, and standard deviations).
+then, it uses 4 different methods to select the most important features, 
+which helps our machine learning models run faster and sometimes better.
 """
 
 import os
+import time
 import numpy as np
 from scipy import signal, stats
-from sklearn.feature_selection import f_classif, SelectKBest
+from sklearn.feature_selection import f_classif
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.decomposition import PCA
-import time
+from sklearn.preprocessing import StandardScaler
 
-# ============================================================
-# Configuration
-# ============================================================
+# --- settings ---
+INPUT_FOLDER = 'processed_data'
+OUTPUT_FOLDER = 'processed_data'
 
-INPUT_DIR = 'processed_data'
-OUTPUT_DIR = 'processed_data'
-
-# EEG Frequency Bands (Hz)
-BANDS = {
-    'delta': (0.5, 4),
-    'theta': (4, 8),
-    'alpha': (8, 13),
-    'beta': (13, 30),
-    'gamma': (30, 45)
-}
+# eeg frequency bands (in hz)
+# brain waves are categorized by these frequencies
+DELTA_BAND = (0.5, 4)
+THETA_BAND = (4, 8)
+ALPHA_BAND = (8, 13)
+BETA_BAND = (13, 30)
+GAMMA_BAND = (30, 45)
 
 
-# ============================================================
-# Feature Extraction Functions
-# ============================================================
+# --- feature extraction functions ---
 
-def calculate_band_powers(data, fs):
+def calculate_power_for_band(frequencies, power_spectrum, min_freq, max_freq):
     """
-    Calculate absolute band powers for each frequency band using Welch's method.
-    
-    Args:
-        data: shape (n_samples, n_channels) - a single 1s window
-        fs: sampling rate (125 Hz)
-    Returns:
-        band_powers: shape (n_channels, 5) - power for each band per channel
+    calculates how much power is in a specific frequency band (like alpha or beta).
+    it looks at the power_spectrum array and adds up all the values that fall
+    between the min_freq and max_freq limits. power_sprectrum is the relative power of each frequency
+    where power_spectrum and frequencies are 1D arrays given by welch.
     """
-    n_channels = data.shape[1]
-    band_powers = np.zeros((n_channels, len(BANDS)))
+    total_power = 0
+    # add up the power for all frequencies in our range
+    for i in range(len(frequencies)):
+        if frequencies[i] >= min_freq and frequencies[i] <= max_freq:
+            total_power = total_power + power_spectrum[i]
+    return total_power
+
+
+def extract_features_for_one_window(window_data, sampling_rate):
+    """
+    calculates all 84 features for a single 1-second chunk of eeg data.
+    there are 7 channels, and we calculate 12 features per channel.
     
-    for ch in range(n_channels):
-        # Welch's method to estimate PSD
-        # nperseg=fs means 1s window (which is the whole data segment here)
-        freqs, psd = signal.welch(data[:, ch], fs, nperseg=fs, scaling='density')
+    reference (paper 1): this extraction of statistical and frequency band 
+    power features is derived from aci et al. (2019) "svm-based eeg attention classification".
+    """
+    num_channels = window_data.shape[1]
+    features_list = []
+    
+    for channel in range(num_channels):
+        channel_data = window_data[:, channel]
         
-        # Calculate power in each band
-        for i, (band_name, (fmin, fmax)) in enumerate(BANDS.items()):
-            # Find indices of frequencies in this band
-            idx_band = np.logical_and(freqs >= fmin, freqs <= fmax)
-            # Integrate PSD over the frequency band (Simpson's rule could be used, 
-            # but simple sum * df is fine for this approximation)
-            bp = np.sum(psd[idx_band]) * (freqs[1] - freqs[0])
-            band_powers[ch, i] = bp
+        # 1. calculate the frequency power spectrum using welch's method
+        # frequencies is a 1d array of the frequencies, power_spectrum is a 1d array of the power at each frequency
+        frequencies, power_spectrum = signal.welch(channel_data, sampling_rate, nperseg=sampling_rate)
+        
+        # calculate power for each brain wave band
+        #this extracts the relative power of each brain wave band using the 2 arrays from welch
+        delta_power = calculate_power_for_band(frequencies, power_spectrum, DELTA_BAND[0], DELTA_BAND[1])
+        theta_power = calculate_power_for_band(frequencies, power_spectrum, THETA_BAND[0], THETA_BAND[1])
+        alpha_power = calculate_power_for_band(frequencies, power_spectrum, ALPHA_BAND[0], ALPHA_BAND[1])
+        beta_power = calculate_power_for_band(frequencies, power_spectrum, BETA_BAND[0], BETA_BAND[1])
+        gamma_power = calculate_power_for_band(frequencies, power_spectrum, GAMMA_BAND[0], GAMMA_BAND[1])
+        
+        # 2. calculate band ratios (these are used in a couple focus/ADHD studies as a predictor of attention)
+        #add a tiny number (0.0001) so we never divide by zero and crash the program
+        alpha_beta_ratio = alpha_power / (beta_power + 0.0001)
+        theta_beta_ratio = theta_power / (beta_power + 0.0001)
+        theta_alpha_ratio = theta_power / (alpha_power + 0.0001)
+        
+        # 3. calculate basic statistical features (mean, std, skewness, kurtosis)
+        # reference: aci et al. (2019) proved that time-domain statistical properties 
+        # (like kurtosis, which measures sudden extreme spikes in the brainwave) 
+        # provide clues for svm attention classification alongside frequencies.
+        mean_value = np.mean(channel_data)
+        std_deviation = np.std(channel_data)
+        skewness = stats.skew(channel_data)
+        kurtosis = stats.kurtosis(channel_data)
+        
+        # add all 12 features for this channel to our list
+        features_list.append(delta_power)
+        features_list.append(theta_power)
+        features_list.append(alpha_power)
+        features_list.append(beta_power)
+        features_list.append(gamma_power)
+        features_list.append(alpha_beta_ratio)
+        features_list.append(theta_beta_ratio)
+        features_list.append(theta_alpha_ratio)
+        features_list.append(mean_value)
+        features_list.append(std_deviation)
+        features_list.append(skewness)
+        features_list.append(kurtosis)
+        
+    # convert our list of features into a numpy array
+    return np.array(features_list)
+
+
+def process_all_windows(windows_array, sampling_rate):
+    """
+    loops through entire array of 1-second chunks (windows) one by one.
+    it calls extract_features_for_one_window on each chunk and stacks the 
+    resulting features into a massive 2d table (windows x features).
+    """
+    num_windows = windows_array.shape[0]
+    
+    # do the first window just to see how many features we get back
+    first_window_features = extract_features_for_one_window(windows_array[0], sampling_rate)
+    num_features = len(first_window_features)
+    
+    # create an empty table to hold all our features
+    all_features = np.zeros((num_windows, num_features))
+    all_features[0] = first_window_features
+    
+    # loop through the rest
+    for i in range(1, num_windows):
+        all_features[i] = extract_features_for_one_window(windows_array[i], sampling_rate)
+        
+    return all_features
+
+
+# --- feature selection methods ---
+
+def select_best_features(train_features, train_labels, test_features, method_name):
+    """
+    applies a feature selection method (like anova or random forest) to reduce the 
+    number of features. it identifies the most predictive features in the training 
+    data and throws away the rest, keeping only the best ones for both train and test sets.
+    this helps the models train faster and ignore noisy data.
+    
+    reference (paper 3): the 'fi' (random forest feature importance) methodology 
+    is derived from wang & kim (2024) "knn with feature importance for brain attention detection".
+    """
+    if method_name == 'none':
+        # don't do anything, just keep all features
+        return train_features, test_features
+        
+    elif method_name == 'anova':
+        # anova tries to find features that are statistically different between classes
+        # it basically runs ANOVA for 2 groups (focused and unfocused) for all features and gives each feature an f-score
+        # and a p-value. this is equivalent to running t-tests on all the features.
+        f_scores, p_values = f_classif(train_features, train_labels)
+        
+        # we only keep features where the p-value is less than or equal to 0.05
+        # (meaning there's less than a 5% chance the difference is random)
+        # this is basically an updated version of the method from paper 2
+        features_to_keep = p_values <= 0.05
+        
+        # just in case anova throws away everything, save the top 10 as a backup
+        if sum(features_to_keep) == 0:
+            print("  ANOVA kept 0 features! Falling back to the top 10.")
+            best_10_indexes = np.argsort(p_values)[0:10]
+            features_to_keep = np.zeros(len(p_values), dtype=bool)
+            for index in best_10_indexes:
+                features_to_keep[index] = True
+                
+        return train_features[:, features_to_keep], test_features[:, features_to_keep]
+        
+    elif method_name == 'fi':
+        # feature importance uses a random forest to see which features it relies on most
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(train_features, train_labels)
+        
+        importances = model.feature_importances_
+        average_importance = np.mean(importances)
+        
+        # keep features that are more important than average
+        features_to_keep = importances >= average_importance
+        
+        if sum(features_to_keep) == 0:
+            features_to_keep = importances > 0
             
-    return band_powers
-
-
-def extract_window_features(window, fs):
-    """
-    Extract all features for a single 1-second EEG window.
-    
-    Args:
-        window: shape (125, 7) - 1s of data at 125 Hz for 7 channels
-        fs: sampling rate
-    Returns:
-        1D feature vector for this window (size 84)
-    """
-    n_channels = window.shape[1]
-    features = []
-    
-    # 1. Band Powers (5 per channel)
-    bps = calculate_band_powers(window, fs)
-    features.extend(bps.flatten())
-    
-    # 2. Band Ratios (3 per channel)
-    # bps columns: 0=delta, 1=theta, 2=alpha, 3=beta, 4=gamma
-    for ch in range(n_channels):
-        theta = bps[ch, 1]
-        alpha = bps[ch, 2]
-        beta = bps[ch, 3]
+        return train_features[:, features_to_keep], test_features[:, features_to_keep]
         
-        # Add small epsilon to prevent division by zero
-        eps = 1e-10
-        alpha_beta = alpha / (beta + eps)
-        theta_beta = theta / (beta + eps)
-        theta_alpha = theta / (alpha + eps)
+    elif method_name == 'lcc':
+        # linear correlation checks how strongly each feature relates to the label
+        num_features = train_features.shape[1]
+        correlations = np.zeros(num_features)
         
-        features.extend([alpha_beta, theta_beta, theta_alpha])
-    
-    # 3. Statistical Features (4 per channel)
-    for ch in range(n_channels):
-        ch_data = window[:, ch]
-        mean_val = np.mean(ch_data)
-        std_val = np.std(ch_data)
-        skew_val = stats.skew(ch_data)
-        kurt_val = stats.kurtosis(ch_data)
-        
-        features.extend([mean_val, std_val, skew_val, kurt_val])
-        
-    return np.array(features)
-
-
-def process_dataset_features(X, fs):
-    """
-    Extract features for all windows in a dataset.
-    
-    Args:
-        X: shape (n_windows, window_size, n_channels)
-        fs: sampling rate
-    Returns:
-        feature matrix: shape (n_windows, n_features)
-    """
-    n_windows = X.shape[0]
-    # Calculate feature vector size for first window to preallocate
-    first_feat = extract_window_features(X[0], fs)
-    n_features = len(first_feat)
-    
-    X_feat = np.zeros((n_windows, n_features))
-    X_feat[0] = first_feat
-    
-    for i in range(1, n_windows):
-        X_feat[i] = extract_window_features(X[i], fs)
-        
-    return X_feat
-
-
-# ============================================================
-# Feature Selection Methods
-# ============================================================
-
-def select_features(X_train, y_train, X_test, method='none'):
-    """
-    Apply feature selection method.
-    
-    Args:
-        X_train, y_train: training data
-        X_test: test data
-        method: 'none', 'anova', 'fi', 'lcc', 'pca'
-    Returns:
-        X_train_sel, X_test_sel
-    """
-    if method == 'none':
-        return X_train, X_test
-        
-    elif method == 'anova':
-        # ANOVA F-test (p <= 0.05)
-        # SelectKBest expects a fixed k, so we compute all p-values first
-        f_vals, p_vals = f_classif(X_train, y_train)
-        selected = p_vals <= 0.05
-        
-        # If no features selected, fallback to top 10 to prevent empty matrix
-        if not np.any(selected):
-            print("  ANOVA found 0 features p<=0.05, keeping top 10")
-            idx = np.argsort(p_vals)[:10]
-            selected = np.zeros(len(p_vals), dtype=bool)
-            selected[idx] = True
+        for i in range(num_features):
+            # calculate correlation and take the absolute value (we care about strength, not direction)
+            corr = np.corrcoef(train_features[:, i], train_labels)[0, 1]
+            correlations[i] = abs(corr)
             
-        return X_train[:, selected], X_test[:, selected]
+        # fix any errors if a feature was completely flat (nan)
+        correlations = np.nan_to_num(correlations)
+        average_correlation = np.mean(correlations)
         
-    elif method == 'fi':
-        # Feature Importance (Random Forest)
-        rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        rf.fit(X_train, y_train)
-        importances = rf.feature_importances_
-        threshold = np.mean(importances)
-        selected = importances >= threshold
+        features_to_keep = correlations >= average_correlation
         
-        if not np.any(selected):
-            # Fallback
-            selected = importances > 0
-            
-        return X_train[:, selected], X_test[:, selected]
+        if sum(features_to_keep) == 0:
+            best_10_indexes = np.argsort(correlations)[-10:]
+            features_to_keep = np.zeros(len(correlations), dtype=bool)
+            for index in best_10_indexes:
+                features_to_keep[index] = True
+                
+        return train_features[:, features_to_keep], test_features[:, features_to_keep]
         
-    elif method == 'lcc':
-        # Linear Correlation Coefficient
-        corrs = np.array([np.abs(np.corrcoef(X_train[:, i], y_train)[0, 1]) 
-                          for i in range(X_train.shape[1])])
-        # Handle NaNs if any feature is constant
-        corrs = np.nan_to_num(corrs)
-        threshold = np.mean(corrs)
-        selected = corrs >= threshold
-        
-        if not np.any(selected):
-            idx = np.argsort(corrs)[-10:] # Top 10
-            selected = np.zeros(len(corrs), dtype=bool)
-            selected[idx] = True
-            
-        return X_train[:, selected], X_test[:, selected]
-        
-    elif method == 'pca':
-        # PCA with mle (automatic components)
-        # PCA requires scaled data, but we'll scale inside the training pipeline.
-        # However, for PCA transformation it's better to scale here just for the PCA step.
-        from sklearn.preprocessing import StandardScaler
+    elif method_name == 'pca':
+        # pca (principal component analysis) squishes the features together to save space
+        # it needs the data to be scaled first (mean=0, std=1)
         scaler = StandardScaler()
-        X_train_sc = scaler.fit_transform(X_train)
-        X_test_sc = scaler.transform(X_test)
+        scaled_train = scaler.fit_transform(train_features)
+        scaled_test = scaler.transform(test_features)
         
-        # 'mle' can sometimes fail if n_samples < n_features, use fixed variance if so
-        try:
-            pca = PCA(n_components='mle', random_state=42)
-            X_train_pca = pca.fit_transform(X_train_sc)
-        except Exception:
-            # Fallback to retaining 95% variance
-            pca = PCA(n_components=0.95, random_state=42)
-            X_train_pca = pca.fit_transform(X_train_sc)
-            
-        X_test_pca = pca.transform(X_test_sc)
-        return X_train_pca, X_test_pca
+        # we tell it to keep 95% of the original variance (information)
+        pca = PCA(n_components=0.95, random_state=42)
+        pca_train = pca.fit_transform(scaled_train)
+        pca_test = pca.transform(scaled_test)
+        
+        return pca_train, pca_test
         
     else:
-        raise ValueError(f"Unknown method {method}")
+        print(f"Error: Unknown method {method_name}")
+        return train_features, test_features
 
 
-# ============================================================
-# Main Pipeline
-# ============================================================
+# --- main process ---
 
 def main():
-    print("=" * 60)
-    print("EEG Feature Extraction & Selection Pipeline")
-    print("=" * 60)
+    print("Starting feature extraction")
     
-    methods = ['none', 'anova', 'fi', 'lcc', 'pca']
+    methods_to_run = ['none', 'anova', 'fi', 'lcc', 'pca']
     
-    # Find all processed npz files
-    npz_files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith('.npz') and not '_features' in f])
+    # find all the files we created in step 1
+    all_files = os.listdir(INPUT_FOLDER)
+    subject_files = []
+    for file in all_files:
+        if file.endswith('.npz') and '_features' not in file:
+            subject_files.append(file)
+            
+    start_time = time.time()
     
-    print(f"Found {len(npz_files)} processed subject files.")
-    
-    total_start = time.time()
-    
-    for i, npz_file in enumerate(npz_files):
-        subj_name = npz_file.split('.')[0]
-        print(f"\n[{i+1}/{len(npz_files)}] Extracting features for {subj_name}...")
-        start = time.time()
+    for file in subject_files:
+        subject_name = file.replace('.npz', '')
+        print(f"\nProcessing {subject_name}...")
         
-        # Load processed windows
-        data = np.load(os.path.join(INPUT_DIR, npz_file))
+        # load the data (stored as numpy arrays in the previous step)
+        data = np.load(os.path.join(INPUT_FOLDER, file))
         X_train_raw = data['X_train']
         y_train = data['y_train']
         X_test_raw = data['X_test']
         y_test = data['y_test']
-        fs = int(data['fs'])
+        sampling_rate = int(data['fs'])
         
-        # 1. Extract base features
-        print(f"  Extracting base features (84 total)...", end='', flush=True)
-        t0 = time.time()
-        X_train_feat = process_dataset_features(X_train_raw, fs)
-        X_test_feat = process_dataset_features(X_test_raw, fs)
-        print(f" done ({time.time()-t0:.1f}s)")
+        # 1. calculate the base 84 features
+        print("  Calculating 84 base features...")
+        train_features = process_all_windows(X_train_raw, sampling_rate)
+        test_features = process_all_windows(X_test_raw, sampling_rate)
         
-        # 2. Apply feature selection methods and save
-        results = {'y_train': y_train, 'y_test': y_test}
+        # 2. run feature selection and save everything
+        # store all different feature versions in a dictionary
+        data_to_save = {
+            'y_train': y_train,
+            'y_test': y_test
+        }
         
-        for method in methods:
-            print(f"  Selecting features ({method})...", end='', flush=True)
-            t0 = time.time()
-            X_tr_sel, X_te_sel = select_features(X_train_feat, y_train, X_test_feat, method)
+        for method in methods_to_run:
+            print(f"  Running feature selection: {method}")
+            selected_train, selected_test = select_best_features(train_features, y_train, test_features, method)
             
-            results[f'X_train_{method}'] = X_tr_sel
-            results[f'X_test_{method}'] = X_te_sel
-            print(f" done ({X_tr_sel.shape[1]} features, {time.time()-t0:.1f}s)")
+            # save these selected features into the dictionary
+            data_to_save[f'X_train_{method}'] = selected_train
+            data_to_save[f'X_test_{method}'] = selected_test
             
-        # Save feature file
-        out_path = os.path.join(OUTPUT_DIR, f"{subj_name}_features.npz")
-        np.savez_compressed(out_path, **results)
+        # save the dictionary to a new file
+        output_file = os.path.join(OUTPUT_FOLDER, f"{subject_name}_features.npz")
+        #since array names are dynamic its easier to throw it all into dicitonary and unpack it
+        np.savez_compressed(output_file, **data_to_save)
         
-        print(f"  Saved {subj_name} in {time.time()-start:.1f}s")
-        
-    print(f"\n{'=' * 60}")
-    print(f"Feature extraction complete in {time.time()-total_start:.1f}s")
-    print(f"{'=' * 60}")
+    end_time = time.time()
+    print(f"\nFinished extracting features in {end_time - start_time:.1f} seconds!")
 
 if __name__ == '__main__':
     main()

@@ -4,10 +4,9 @@ model_training.py - step 3: model training and evaluation
 this script trains 5 different machine learning models to guess 
 if the person was focused or unfocused based on their brainwaves.
 
-we test three scenarios:
+we test two scenarios:
 1. subject-dependent: we train on a person's first 3 rounds and test on their 4th.
 2. cross-subject: we train on 19 people and test on the 1 left out.
-3. calibration: we train on 19 people + 3 rounds of the test subject, and test on the 4th.
 """
 
 import os
@@ -41,35 +40,6 @@ def get_models():
         'DT': DecisionTreeClassifier(criterion='entropy', random_state=42),
         'GBoosting': GradientBoostingClassifier(n_estimators=100, random_state=42)
     }
-
-def apply_dynamic_feature_selection(X_train_raw, y_train, X_test_raw, method_name):
-    """Applies feature selection dynamically to prevent dimension mismatch in aggregated data."""
-    if method_name == 'none':
-        return X_train_raw, X_test_raw
-    elif method_name == 'anova':
-        from sklearn.feature_selection import SelectKBest, f_classif
-        selector = SelectKBest(f_classif, k=30)
-        return selector.fit_transform(X_train_raw, y_train), selector.transform(X_test_raw)
-    elif method_name == 'fi':
-        rf = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
-        rf.fit(X_train_raw, y_train)
-        importances = rf.feature_importances_
-        mask = importances >= np.mean(importances)
-        if not np.any(mask): mask = importances > 0
-        return X_train_raw[:, mask], X_test_raw[:, mask]
-    elif method_name == 'lcc':
-        corrs = np.array([abs(np.corrcoef(X_train_raw[:, i], y_train)[0, 1]) for i in range(84)])
-        corrs = np.nan_to_num(corrs)
-        mask = corrs >= np.mean(corrs)
-        return X_train_raw[:, mask], X_test_raw[:, mask]
-    elif method_name == 'pca':
-        from sklearn.decomposition import PCA
-        pca_scaler = StandardScaler()
-        X_train_scaled = pca_scaler.fit_transform(X_train_raw)
-        X_test_scaled = pca_scaler.transform(X_test_raw)
-        pca = PCA(n_components=0.95, random_state=42)
-        return pca.fit_transform(X_train_scaled), pca.transform(X_test_scaled)
-    return X_train_raw, X_test_raw
 
 # --- main process ---
 
@@ -128,7 +98,7 @@ def main():
         most_common_train = stats.mode(subject_data['y_train'], keepdims=True)[0][0]
         baseline_acc_dependent = np.mean(subject_data['y_test'] == most_common_train)
         
-        # Prepare Cross-Subject labels
+        # set up the cross-subject labels (train on everyone else, test on this subject)
         y_test_cross = subject_data['y_combined']
         y_train_cross_list = []
         for other_subj in subject_names:
@@ -139,35 +109,22 @@ def main():
         most_common_cross = stats.mode(y_train_cross, keepdims=True)[0][0]
         baseline_acc_cross = np.mean(y_test_cross == most_common_cross)
         
-        # Prepare Cross-Subject Raw Features (we must use 'none' which has all 84 features)
-        X_test_cross_raw = subject_data['X_combined_none']
-        X_train_cross_list = []
-        for other_subj in subject_names:
-            if other_subj != test_subject:
-                X_train_cross_list.append(all_subjects_data[other_subj]['X_combined_none'])
-        X_train_cross_raw = np.concatenate(X_train_cross_list)
-        
-        # Prepare Calibration Raw Data
-        X_train_calib_raw = np.concatenate([X_train_cross_raw, subject_data['X_train_none']])
-        y_train_calib = np.concatenate([y_train_cross, subject_data['y_train']])
-        X_test_calib_raw = subject_data['X_test_none']
-        y_test_calib = subject_data['y_test']
-        
-        most_common_calib = stats.mode(y_train_calib, keepdims=True)[0][0]
-        baseline_acc_calib = np.mean(y_test_calib == most_common_calib)
-        
-        # Loop through each feature selection method
+        # loop through each feature selection method
         for method in FEATURE_METHODS:
             
-            # Prepare Subject-Dependent Data (these were pre-selected safely)
+            # prepare subject-dependent data
             X_train_dep = subject_data[f'X_train_{method}']
             X_test_dep = subject_data[f'X_test_{method}']
             y_train_dep = subject_data['y_train']
             y_test_dep = subject_data['y_test']
             
-            # Prepare Cross-Subject and Calibration Data
-            X_train_cross, X_test_cross = apply_dynamic_feature_selection(X_train_cross_raw, y_train_cross, X_test_cross_raw, method)
-            X_train_calib, X_test_calib = apply_dynamic_feature_selection(X_train_calib_raw, y_train_calib, X_test_calib_raw, method)
+            # prepare cross-subject data
+            X_test_cross = subject_data[f'X_combined_{method}']
+            X_train_cross_list = []
+            for other_subj in subject_names:
+                if other_subj != test_subject:
+                    X_train_cross_list.append(all_subjects_data[other_subj][f'X_combined_{method}'])
+            X_train_cross = np.concatenate(X_train_cross_list)
             
             # loop through each machine learning model
             models = get_models()
@@ -247,39 +204,6 @@ def main():
                 if model_name == 'SVM' and method == 'pca':
                     matrix = confusion_matrix(y_test_cross, predictions_cross)
                     saved_matrices[f"{test_subject}_cross"] = matrix
-                    
-                # --- c. calibration evaluation ---
-                fresh_model_calib = get_models()[model_name]
-                
-                clf_calib = Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('classifier', fresh_model_calib)
-                ])
-                
-                t0 = time.time()
-                clf_calib.fit(X_train_calib, y_train_calib)
-                train_time_calib = time.time() - t0
-                
-                predictions_calib = clf_calib.predict(X_test_calib)
-                
-                acc_calib = accuracy_score(y_test_calib, predictions_calib)
-                f1_calib = f1_score(y_test_calib, predictions_calib, average='weighted', zero_division=0)
-                
-                results_list.append({
-                    'Scenario': 'Calibration',
-                    'Subject': test_subject,
-                    'Method': method,
-                    'Model': model_name,
-                    'Features': X_train_calib.shape[1],
-                    'Accuracy': acc_calib,
-                    'F1': f1_calib,
-                    'TrainTime_s': train_time_calib,
-                    'BaselineAcc': baseline_acc_calib
-                })
-                
-                if model_name == 'RF' and method == 'anova':
-                    matrix = confusion_matrix(y_test_calib, predictions_calib)
-                    saved_matrices[f"{test_subject}_calib"] = matrix
 
     # 3. save all results
     results_df = pd.DataFrame(results_list)

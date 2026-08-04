@@ -39,18 +39,18 @@ Install with: `pip install -r requirements.txt`
 
 ```
 353 project/
-├── data_processing.py       # Raw EEG → cleaned, downsampled windows
-├── feature_extraction.py    # Windows → feature matrices
-├── model_training.py        # Train SVM, KNN, RF, DT, GBoosting
-├── visualization.py         # Generate report figures
-├── results/
-│   ├── figures/             # Output plots
-│   └── metrics/             # CSV result tables
-├── processed_data/          # Intermediate .npz files (generated)
-├── MEMA Dataset/            # Raw data (not included, see above)
-├── Papers/                  # Reference papers
-├── requirements.txt
-└── README.md
+data_processing.py       # Raw EEG → cleaned, downsampled windows
+feature_extraction.py    # Windows → feature matrices
+model_training.py        # Train SVM, KNN, RF, DT, GBoosting
+visualization.py         # Generate report figures
+results/
+   figures/             # Output plots
+   metrics/             # CSV result tables
+processed_data/          # Intermediate .npz files (generated)
+MEMA Dataset/            # Raw data (not included, see above)
+Papers/                  # Reference papers
+requirements.txt
+README.md
 ```
 
 ## Methods

@@ -4,7 +4,7 @@ feature_extraction.py - step 2: extract eeg features
 this script takes the processed 1-second chunks and calculates mathematical 
 features from them (like band powers, averages, and standard deviations).
 then, it uses 4 different methods to select the most important features, 
-which helps our machine learning models run faster and sometimes better.
+which helps my machine learning models run faster and sometimes better.
 """
 
 import os
@@ -39,7 +39,7 @@ def calculate_power_for_band(frequencies, power_spectrum, min_freq, max_freq):
     where power_spectrum and frequencies are 1D arrays given by welch.
     """
     total_power = 0
-    # add up the power for all frequencies in our range
+    # add up the power for all frequencies in my range
     for i in range(len(frequencies)):
         if frequencies[i] >= min_freq and frequencies[i] <= max_freq:
             total_power = total_power + power_spectrum[i]
@@ -49,7 +49,7 @@ def calculate_power_for_band(frequencies, power_spectrum, min_freq, max_freq):
 def extract_features_for_one_window(window_data, sampling_rate):
     """
     calculates all 84 features for a single 1-second chunk of eeg data.
-    there are 7 channels, and we calculate 12 features per channel.
+    there are 7 channels, and i calculate 12 features per channel.
     
     reference (paper 1): this extraction of statistical and frequency band 
     power features is derived from aci et al. (2019) "svm-based eeg attention classification".
@@ -73,7 +73,7 @@ def extract_features_for_one_window(window_data, sampling_rate):
         gamma_power = calculate_power_for_band(frequencies, power_spectrum, GAMMA_BAND[0], GAMMA_BAND[1])
         
         # 2. calculate band ratios (these are used in a couple focus/ADHD studies as a predictor of attention)
-        #add a tiny number (0.0001) so we never divide by zero and crash the program
+        #add a tiny number (0.0001) so i never divide by zero and crash the program
         alpha_beta_ratio = alpha_power / (beta_power + 0.0001)
         theta_beta_ratio = theta_power / (beta_power + 0.0001)
         theta_alpha_ratio = theta_power / (alpha_power + 0.0001)
@@ -87,7 +87,7 @@ def extract_features_for_one_window(window_data, sampling_rate):
         skewness = stats.skew(channel_data)
         kurtosis = stats.kurtosis(channel_data)
         
-        # add all 12 features for this channel to our list
+        # add all 12 features for this channel to my list
         features_list.append(delta_power)
         features_list.append(theta_power)
         features_list.append(alpha_power)
@@ -101,7 +101,7 @@ def extract_features_for_one_window(window_data, sampling_rate):
         features_list.append(skewness)
         features_list.append(kurtosis)
         
-    # convert our list of features into a numpy array
+    # convert my list of features into a numpy array
     return np.array(features_list)
 
 
@@ -113,11 +113,11 @@ def process_all_windows(windows_array, sampling_rate):
     """
     num_windows = windows_array.shape[0]
     
-    # do the first window just to see how many features we get back
+    # do the first window just to see how many features i get back
     first_window_features = extract_features_for_one_window(windows_array[0], sampling_rate)
     num_features = len(first_window_features)
     
-    # create an empty table to hold all our features
+    # create an empty table to hold all my features
     all_features = np.zeros((num_windows, num_features))
     all_features[0] = first_window_features
     
@@ -150,7 +150,7 @@ def select_best_features(train_features, train_labels, test_features, method_nam
         # and a p-value. this is equivalent to running t-tests on all the features.
         f_scores, p_values = f_classif(train_features, train_labels)
         
-        # we only keep features where the p-value is less than or equal to 0.05
+        # i only keep features where the p-value is less than or equal to 0.05
         # (meaning there's less than a 5% chance the difference is random)
         # this is basically an updated version of the method from paper 2
         features_to_keep = p_values <= 0.05
@@ -187,7 +187,7 @@ def select_best_features(train_features, train_labels, test_features, method_nam
         correlations = np.zeros(num_features)
         
         for i in range(num_features):
-            # calculate correlation and take the absolute value (we care about strength, not direction)
+            # calculate correlation and take the absolute value (i care about strength, not direction)
             corr = np.corrcoef(train_features[:, i], train_labels)[0, 1]
             correlations[i] = abs(corr)
             
@@ -212,7 +212,7 @@ def select_best_features(train_features, train_labels, test_features, method_nam
         scaled_train = scaler.fit_transform(train_features)
         scaled_test = scaler.transform(test_features)
         
-        # we tell it to keep 95% of the original variance (information)
+        # i tell it to keep 95% of the original variance (information)
         pca = PCA(n_components=0.95, random_state=42)
         pca_train = pca.fit_transform(scaled_train)
         pca_test = pca.transform(scaled_test)
@@ -231,7 +231,7 @@ def main():
     
     methods_to_run = ['none', 'anova', 'fi', 'lcc', 'pca']
     
-    # find all the files we created in step 1
+    # find all the files i created in step 1
     all_files = os.listdir(INPUT_FOLDER)
     subject_files = []
     for file in all_files:

@@ -1,11 +1,11 @@
 """
 data_processing.py - step 1: raw eeg data processing
 
-this script reads the raw .txt files, picks the 7 channels we need, 
+this script reads the raw .txt files, picks the 7 channels i need, 
 downsamples the data to 125 hz (so it matches the neuropawn headset), 
 filters out noise, and cuts it into 1-second chunks.
 
-we save the data into .npz files so it's easy to load for the next step.
+i save the data into .npz files so it's easy to load for the next step.
 """
 
 import os
@@ -18,12 +18,12 @@ from scipy import signal
 DATA_FOLDER = 'MEMA Dataset/MEMA/For_graph'
 OUTPUT_FOLDER = 'processed_data'
 
-# we are dropping the sampling rate from 500 hz to 125 hz
+# i are dropping the sampling rate from 500 hz to 125 hz
 ORIGINAL_HZ = 500
 TARGET_HZ = 125
 DOWNSAMPLE_FACTOR = 4
 
-# the 7 channels we are using based on the research papers
+# the 7 channels i are using based on the research papers
 CHANNEL_COLUMNS = [2, 3, 4, 12, 13, 14, 23]
 CHANNEL_NAMES = ['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz']
 
@@ -35,7 +35,7 @@ SAMPLES_PER_WINDOW = 125
 def downsample_data(raw_eeg_data):
     """
     makes the data smaller (125 hz instead of 500 hz).
-    we use scipy's decimate function because it automatically 
+    i use scipy's decimate function because it automatically 
     applies a filter to stop aliasing (weird artifacts).
     """
     num_samples = raw_eeg_data.shape[0] #number of rows (time points)
@@ -58,12 +58,12 @@ def downsample_data(raw_eeg_data):
 def filter_data(eeg_data):
     """
     removes low-frequency drift and high-frequency noise.
-    we keep frequencies between 0.5 hz and 45.0 hz.
+    i keep frequencies between 0.5 hz and 45.0 hz.
 
     why: less than 0.5hz is slow muscle movements (artifacts) and higher than 45hz is noise
     """
     # create a butterworth bandpass filter
-    #nyquist theorem: the highest frequency we can detect is half the sampling rate (learned this in CMPT 365)
+    #nyquist theorem: the highest frequency i can detect is half the sampling rate (learned this in CMPT 365)
     nyquist_freq = TARGET_HZ / 2.0
     low_cutoff = 0.5 / nyquist_freq #filters want normalized frequencies between 0 and 1
     high_cutoff = 45.0 / nyquist_freq 
@@ -177,7 +177,7 @@ def main():
             if label_number == -1 or dataset_type == 'unknown':
                 continue
                 
-            # 1. read the raw data using pandas (only the 7 columns we need)
+            # 1. read the raw data using pandas (only the 7 columns i need)
             df = pd.read_csv(file_path, header=None, usecols=CHANNEL_COLUMNS)
             raw_data = df.values
             

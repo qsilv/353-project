@@ -4,9 +4,9 @@ model_training.py - step 3: model training and evaluation
 this script trains 5 different machine learning models to guess 
 if the person was focused or unfocused based on their brainwaves.
 
-we test two scenarios:
-1. subject-dependent: we train on a person's first 3 rounds and test on their 4th.
-2. cross-subject: we train on 19 people and test on the 1 left out.
+i test two scenarios:
+1. subject-dependent: i train on a person's first 3 rounds and test on their 4th.
+2. cross-subject: i train on 19 people and test on the 1 left out.
 """
 
 import os
@@ -32,7 +32,7 @@ OUTPUT_FOLDER = 'results/metrics'
 FEATURE_METHODS = ['none', 'anova', 'fi', 'lcc', 'pca']
 
 def get_models():
-    """returns a fresh dictionary of models so we can train from scratch."""
+    """dictionary of models so i can train from scratch."""
     return {
         'SVM': SVC(kernel='rbf', C=1.0, probability=True, random_state=42),
         'KNN': KNeighborsClassifier(n_neighbors=5),
@@ -44,7 +44,7 @@ def get_models():
 # --- main process ---
 
 def main():
-    print("Starting model training...")
+    print("Starting model training")
     
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
@@ -52,11 +52,12 @@ def main():
     all_files = os.listdir(INPUT_FOLDER)
     feature_files = [f for f in all_files if f.endswith('_features.npz')]
     
-    print(f"Loading data for {len(feature_files)} subjects into memory...")
+    print(f"Loading data for {len(feature_files)} subjects")
     
     # 1. load all data into a big dictionary
     all_subjects_data = {}
     for file in feature_files:
+        #gets rid of file tail to just get the actual name
         subject_name = file.replace('_features.npz', '')
         data = np.load(os.path.join(INPUT_FOLDER, file))
         
@@ -76,12 +77,12 @@ def main():
             
         all_subjects_data[subject_name] = subject_data
         
-    print("Data loaded!")
+    print("Data loaded")
     
-    # list to hold all our results so we can save it to a csv later
+    # list to hold all my results so i can save it to a csv later
     results_list = []
     
-    # dictionary to save the confusion matrices (so we can draw pictures of them later)
+    # dictionary to save the confusion matrices (so i can draw pictures of them later)
     saved_matrices = {}
     
     start_time = time.time()
@@ -94,8 +95,10 @@ def main():
         
         subject_data = all_subjects_data[test_subject]
         
-        # calculate baseline accuracy (if we just guessed the most common label every time)
+        # calculate baseline accuracy (if i just guessed the most common label every time)
+        # mode returns object containing 2 arrays, most common label and how many times, i need first array
         most_common_train = stats.mode(subject_data['y_train'], keepdims=True)[0][0]
+        # finds mean of true and false (since they are stored as 0 and 1) to produce baseline
         baseline_acc_dependent = np.mean(subject_data['y_test'] == most_common_train)
         
         # set up the cross-subject labels (train on everyone else, test on this subject)
@@ -168,7 +171,7 @@ def main():
                 
                 
                 # --- b. cross-subject evaluation ---
-                # we have to use a fresh copy of the model for cross-subject!
+                # i have to use a fresh copy of the model for cross-subject!
                 fresh_model = get_models()[model_name]
                 
                 # step 1 & 2: scale and train

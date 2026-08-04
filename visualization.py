@@ -1,7 +1,7 @@
 """
 visualization.py - step 4: generate report visualizations
 
-this script takes the results from our model training and draws
+this script takes the results from my model training and draws
 easy-to-understand charts for the final report.
 """
 
@@ -33,7 +33,7 @@ def draw_accuracy_chart():
         
     results_df = pd.read_csv(csv_path)
     
-    # we use a tool called 'catplot' to draw two charts side-by-side
+    # i use a tool called 'catplot' to draw two charts side-by-side
     # one for subject-dependent, one for cross-subject
     chart = sns.catplot(
         data=results_df, 
@@ -64,7 +64,7 @@ def draw_accuracy_chart():
 
 
 def draw_confusion_matrices():
-    """draws a heatmap showing where our models made mistakes."""
+    """draws a heatmap showing where my models made mistakes."""
     matrix_path = os.path.join(RESULTS_FOLDER, 'confusion_matrices.npz')
     if not os.path.exists(matrix_path):
         return
@@ -139,7 +139,7 @@ def draw_brainwaves():
     labels = data['y_train']
     sampling_rate = int(data['fs'])
     
-    # we'll just look at the 'fz' channel (which is index 1 in our list of 7)
+    # i'll just look at the 'fz' channel (which is index 1 in my list of 7)
     channel_index = 1 
     
     # find one focused window and one unfocused window

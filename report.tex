@@ -12,11 +12,15 @@
 \begin{titlepage}
     \vspace*{\fill}
     \begin{center}
-        {\LARGE \bfseries Evaluating Classical Machine Learning for EEG-Based\\Attention State Classification Under Budget Hardware Constraints\par}
+        {\LARGE \bfseries Evaluating ML for EEG-Based\\Attention State Classification Under Budget Hardware Constraints\par}
         \vspace{1.5cm}
-        {\Large CMPT 353 -- Data Science Project Report\par}
+        {\Large CMPT 353 - Project Report\par}
+        {\Large Monir Fathalla\par}
         \vspace{1cm}
         {\large \today\par}
+        \vspace{1cm}
+        \includegraphics[width=0.4\textwidth]{results/figures/sfurl.png}
+
     \end{center}
     \vspace*{\fill}
 \end{titlepage}
@@ -39,7 +43,7 @@ The raw MEMA data consists of tab-separated text files inside a \texttt{For\_gra
 
 My preprocessing pipeline (\texttt{data\_processing.py}) performs four steps:
 \begin{enumerate}
-    \item \textbf{Channel selection}: I discard 24 of the 32 columns and keep only the 8 channels matching the NeuroPawn's electrode positions (including occipital coverage).
+    \item \textbf{Channel selection}: I discard 24 of the 32 columns and keep only the 8 channels matching the NeuroPawn's electrode positions.
     \item \textbf{Downsampling}: I use \texttt{scipy.signal.decimate} to reduce the sampling rate from 500~Hz to 125~Hz, applying an anti-aliasing filter automatically.
     \item \textbf{Bandpass filtering}: A 4th-order Butterworth filter removes frequencies below 0.5~Hz (motion artifacts) and above 45~Hz (electrical noise).
     \item \textbf{Windowing}: The continuous signal is segmented into 1-second windows with a 50\% overlap. This effectively doubles the training dataset size and allows the models to capture transient brainwave events that might otherwise be split across window boundaries.
@@ -51,7 +55,7 @@ Labels are derived from the filenames: \texttt{\_a} files correspond to ``focuse
 
 From each 1-second window, I extract 12 features per channel using \texttt{feature\_extraction.py}, yielding 96 features total (12~$\times$~8 channels). These include:
 \begin{itemize}
-    \item \textbf{Band powers} (5 features): Average power spectral density in the Delta (0.5--4~Hz), Theta (4--8~Hz), Alpha (8--13~Hz), Beta (13--30~Hz), and Gamma (30--45~Hz) bands, computed via Welch's method. To isolate frequency bands and reduce noise, Welch's method was configured with a segment length of half the sampling rate (64 samples) to enable segment averaging. Finally, these power values were logarithmically transformed (\texttt{log1p}) to compress their heavily right-skewed distributions.
+    \item \textbf{Band powers} (5 features): Average power spectral density in the Delta (0.5--4~Hz), Theta (4--8~Hz), Alpha (8--13~Hz), Beta (13--30~Hz), and Gamma (30--45~Hz) bands, computed via Welch's method. To reduce noise, Welch's method was configured with a segment length of half the sampling rate (64 samples) to enable segment averaging. Finally, these power values were logarithmically transformed (\texttt{log1p}) to compress their heavily right-skewed distributions.
     \item \textbf{Band ratios} (3 features): Alpha/Beta, Theta/Beta, and Theta/Alpha ratios, which prior literature has linked to attention and ADHD markers.
     \item \textbf{Statistical features} (4 features): Mean, standard deviation, skewness, and kurtosis of the raw time-domain signal within each window.
 \end{itemize}
@@ -61,13 +65,13 @@ I then apply five feature selection strategies to produce different feature subs
     \item \textbf{None}: All 96 features retained as a baseline.
     \item \textbf{ANOVA}: Features where the F-test $p$-value $\leq 0.05$ are kept (average $\approx$33 features retained).
     \item \textbf{Feature Importance (FI)}: A Random Forest is trained and features with above-average importance scores are kept (average $\approx$24 features).
-    \item \textbf{Linear Correlation (LCC)}: Features with above-average absolute Pearson correlation with the label are kept (average $\approx$27 features).
-    \item \textbf{PCA}: Principal Component Analysis retaining 95\% of variance (average $\approx$39 components).
+    \item \textbf{Linear Correlation (LCC)}: Features with above-average absolute Pearson correlation with the label are kept (average $\approx$27 features). The system measures correlation between each feature and the label, then keeps labels that are above the average correlation (sum of absolute values of all correlations over n)
+    \item \textbf{PCA}: Principal Component Analysis retaining 95\% of variance (average $\approx$39 components). Setting n\_\_components=0.95 instructs the algorithm to automatically keep the minimum number of components necessary to preserve 95\% of the original data's information.
 \end{enumerate}
 
 \section{Experimental Design}
 
-I evaluate four classifiers from \texttt{scikit-learn} and \texttt{LightGBM}: KNN ($k$=5), Random Forest (100 trees, entropy criterion), Decision Tree (entropy), and LightGBM (100 estimators). Support Vector Machines (SVM) were initially tested but ultimately removed from the pipeline; the $O(N^3)$ computational complexity of the RBF kernel caused it to fail to converge on the large cross-subject training sets within a reasonable timeframe. All models are wrapped in a \texttt{StandardScaler} pipeline.
+I evaluate four classifiers from \texttt{scikit-learn} and \texttt{LightGBM}: KNN ($k$=5), Random Forest (100 trees), Decision Tree, and LightGBM (100 estimators). Support Vector Machines (SVM) were initially tested but ultimately removed from the pipeline; the $O(N^3)$ computational complexity caused it to fail to converge on the large cross-subject training sets within a reasonable timeframe. All models are wrapped in a \texttt{StandardScaler} pipeline.
 
 Each model is tested under two evaluation scenarios:
 \begin{itemize}
@@ -75,7 +79,7 @@ Each model is tested under two evaluation scenarios:
     \item \textbf{Cross-Subject}: Leave-one-subject-out - train on all data from 19 subjects, test on the held-out subject. This simulates out-of-the-box performance on a new user.
 \end{itemize}
 
-This produces a total of $20 \times 4 \times 5 \times 2 = 800$ individual experiments. To make this computationally feasible, I parallelized the outer subject loop across all CPU cores using \texttt{joblib.Parallel}. By utilizing LightGBM's histogram-based splitting and native multi-threading, training wall-clock time was kept to roughly 1 hour despite the dataset effectively doubling in size due to the overlapping windows.
+This produces a total of $20 \times 4 \times 5 \times 2 = 800$ individual experiments. To make this computationally feasible, I parallelized the outer subject loop across all CPU cores using \texttt{joblib.Parallel}. By utilizing LightGBM's native multi-threading, training wall-clock time was kept to roughly 1 hour despite the dataset effectively doubling in size due to the overlapping windows.
 
 \section{Results}
 
@@ -89,7 +93,7 @@ The mean baseline accuracy (always predicting the majority class) is 55.1\% for 
 
 \subsection{Cross-Subject Results}
 
-The following table shows the top cross-subject results. Random Forest with LCC-selected features achieved the highest mean accuracy at 58.0\%, followed closely by Gradient Boosting with PCA features (57.9\%) and Gradient Boosting with LCC features (57.9\%). SVM was dropped due to scoring below the baseline in previous tests.
+The following table shows the top cross-subject results. Random Forest with LCC-selected features achieved the highest mean accuracy at 58.0\%, followed closely by Gradient Boosting with PCA features (57.9\%) and Gradient Boosting with LCC features (57.9\%). SVM was dropped in later iterations due to scoring below the baseline in previous tests.
 
 \begin{table}[H]
 \centering

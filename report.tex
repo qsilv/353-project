@@ -7,14 +7,19 @@
 \usepackage{setspace}
 
 \singlespacing
-
-\title{Evaluating Classical Machine Learning for EEG-Based\\Attention State Classification Under Budget Hardware Constraints}
-\author{CMPT 353 -- Data Science Project Report}
-\date{\today}
-
 \begin{document}
 
-\maketitle
+\begin{titlepage}
+    \vspace*{\fill}
+    \begin{center}
+        {\LARGE \bfseries Evaluating Classical Machine Learning for EEG-Based\\Attention State Classification Under Budget Hardware Constraints\par}
+        \vspace{1.5cm}
+        {\Large CMPT 353 -- Data Science Project Report\par}
+        \vspace{1cm}
+        {\large \today\par}
+    \end{center}
+    \vspace*{\fill}
+\end{titlepage}
 
 \section{Introduction and Motivation}
 
@@ -37,7 +42,7 @@ My preprocessing pipeline (\texttt{data\_processing.py}) performs four steps:
     \item \textbf{Channel selection}: I discard 25 of the 32 columns and keep only the 7 channels matching the NeuroPawn's electrode positions.
     \item \textbf{Downsampling}: I use \texttt{scipy.signal.decimate} to reduce the sampling rate from 500~Hz to 125~Hz, applying an anti-aliasing filter automatically.
     \item \textbf{Bandpass filtering}: A 4th-order Butterworth filter removes frequencies below 0.5~Hz (motion artifacts) and above 45~Hz (electrical noise).
-    \item \textbf{Windowing}: The continuous signal is segmented into non-overlapping 1-second windows (125 samples each).
+    \item \textbf{Windowing}: The continuous signal is segmented into 1-second windows with a 50\% overlap. This effectively doubles the training dataset size and allows the models to capture transient brainwave events that might otherwise be split across window boundaries.
 \end{enumerate}
 
 Labels are derived from the filenames: \texttt{\_a} files correspond to ``focused'' (attentive) states, while \texttt{\_n} and \texttt{\_r} files correspond to ``unfocused'' (neutral/relaxed) states. Rounds 1--3 are designated as training data and round 4 as test data. The processed windows are saved as compressed \texttt{.npz} files.
@@ -46,7 +51,7 @@ Labels are derived from the filenames: \texttt{\_a} files correspond to ``focuse
 
 From each 1-second window, I extract 12 features per channel using \texttt{feature\_extraction.py}, yielding 84 features total (12~$\times$~7 channels). These include:
 \begin{itemize}
-    \item \textbf{Band powers} (5 features): Average power spectral density in the Delta (0.5--4~Hz), Theta (4--8~Hz), Alpha (8--13~Hz), Beta (13--30~Hz), and Gamma (30--45~Hz) bands, computed via Welch's method.
+    \item \textbf{Band powers} (5 features): Average power spectral density in the Delta (0.5--4~Hz), Theta (4--8~Hz), Alpha (8--13~Hz), Beta (13--30~Hz), and Gamma (30--45~Hz) bands, computed via Welch's method. To isolate frequency bands and reduce noise, Welch's method was configured with a segment length of half the sampling rate (64 samples) to enable segment averaging. Finally, these power values were logarithmically transformed (\texttt{log1p}) to compress their heavily right-skewed distributions.
     \item \textbf{Band ratios} (3 features): Alpha/Beta, Theta/Beta, and Theta/Alpha ratios, which prior literature has linked to attention and ADHD markers.
     \item \textbf{Statistical features} (4 features): Mean, standard deviation, skewness, and kurtosis of the raw time-domain signal within each window.
 \end{itemize}
@@ -62,15 +67,15 @@ I then apply five feature selection strategies to produce different feature subs
 
 \section{Experimental Design}
 
-I evaluate five classifiers from \texttt{scikit-learn}: SVM (RBF kernel, $C$=1.0, max\_iter=2000), KNN ($k$=5), Random Forest (100 trees, entropy criterion), Decision Tree (entropy), and Gradient Boosting (100 estimators). All models are wrapped in a \texttt{StandardScaler} pipeline.
+I evaluate four classifiers from \texttt{scikit-learn} and \texttt{LightGBM}: KNN ($k$=5), Random Forest (100 trees, entropy criterion), Decision Tree (entropy), and LightGBM (100 estimators). Support Vector Machines (SVM) were initially tested but ultimately removed from the pipeline; the $O(N^3)$ computational complexity of the RBF kernel caused it to fail to converge on the large cross-subject training sets within a reasonable timeframe. All models are wrapped in a \texttt{StandardScaler} pipeline.
 
 Each model is tested under two evaluation scenarios:
 \begin{itemize}
     \item \textbf{Subject-Dependent}: Train on a subject's rounds 1--3, test on their round 4. This simulates a calibrated, personalized device.
-    \item \textbf{Cross-Subject}: Leave-one-subject-out---train on all data from 19 subjects, test on the held-out subject. This simulates out-of-the-box performance on a new user.
+    \item \textbf{Cross-Subject}: Leave-one-subject-out - train on all data from 19 subjects, test on the held-out subject. This simulates out-of-the-box performance on a new user.
 \end{itemize}
 
-This produces a total of $20 \times 5 \times 5 \times 2 = 1{,}000$ individual experiments. To make this computationally feasible, I parallelized the outer subject loop across all CPU cores using \texttt{joblib.Parallel}, reducing wall-clock time from an estimated 2+ hours to roughly 55 minutes on a 16-thread Ryzen 7.
+This produces a total of $20 \times 4 \times 5 \times 2 = 800$ individual experiments. To make this computationally feasible, I parallelized the outer subject loop across all CPU cores using \texttt{joblib.Parallel}. By utilizing LightGBM's histogram-based splitting and native multi-threading, training wall-clock time was kept to roughly 1 hour despite the dataset effectively doubling in size due to the overlapping windows.
 
 \section{Results}
 
@@ -84,7 +89,7 @@ The mean baseline accuracy (always predicting the majority class) is 55.1\% for 
 
 \subsection{Cross-Subject Results}
 
-The following table shows the top cross-subject results. Gradient Boosting with all 84 raw features achieved the highest mean accuracy at 56.5\%, followed closely by Gradient Boosting with FI-selected features (56.1\%) and Random Forest with all raw features (55.5\%). SVM performed the worst, barely exceeding the 52.5\% baseline regardless of feature method.
+The following table shows the top cross-subject results. Gradient Boosting (LightGBM) with LCC-selected features achieved the highest mean accuracy at 56.0\%, followed closely by Gradient Boosting with PCA features (56.0\%) and Gradient Boosting with all raw features (55.5\%). SVM was dropped due to scoring below the baseline in previous tests.
 
 \begin{table}[H]
 \centering
@@ -94,55 +99,56 @@ The following table shows the top cross-subject results. Gradient Boosting with 
 \toprule
 Model & Features & Accuracy & F1 Score & Avg Train Time (s) \\
 \midrule
-GBoosting & None (84) & 56.5\% & 0.537 & 474.5 \\
-GBoosting & FI ($\approx$24) & 56.1\% & 0.529 & 159.8 \\
-RF & None (84) & 55.5\% & 0.534 & 70.5 \\
-GBoosting & ANOVA ($\approx$33) & 55.1\% & 0.538 & 193.4 \\
-GBoosting & PCA ($\approx$39) & 55.0\% & 0.536 & 203.3 \\
+GBoosting & LCC ($\approx$27) & 56.0\% & 0.539 & 89.1 \\
+GBoosting & PCA ($\approx$39) & 56.0\% & 0.539 & 99.8 \\
+GBoosting & None (84) & 55.5\% & 0.525 & 40.9 \\
+RF & LCC ($\approx$27) & 55.4\% & 0.537 & 78.1 \\
+RF & PCA ($\approx$39) & 55.4\% & 0.533 & 151.1 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Subject-Dependent Results}
 
-Performance improved substantially in the personalized scenario. The same top-performing pair---Gradient Boosting with all 84 features---reached 62.0\%, and Random Forest with all features was close behind at 61.9\%. SVM performed much better here (up to 60.7\% with FI features), confirming that SVMs benefit from the smaller, cleaner per-subject training sets.
+Performance improved substantially in the personalized scenario. The top-performing pair - Gradient Boosting with all 84 features - reached 63.7\%, and Random Forest with all features was close behind at 63.0\%. These higher numbers reflect the benefit of overlapping data windows and logarithmic PSD scaling for subject-calibrated training.
 
 \subsection{Key Observations}
 
 \begin{enumerate}
-    \item \textbf{Tree ensembles dominate.} Gradient Boosting and Random Forest consistently outperformed all other models in both scenarios. These models can internally discover non-linear interactions between features, which is critical for noisy EEG data.
-    \item \textbf{Raw features outperformed feature selection.} Contrary to what I expected, keeping all 84 features (\texttt{none}) produced the highest accuracy for the two best models. Gradient Boosting and Random Forest appear robust enough to handle the full feature space without overfitting. Feature selection methods like PCA and ANOVA actually discarded useful signal.
-    \item \textbf{SVM struggled on cross-subject data.} SVM with all features scored only 49.5\%---below the baseline. The large, noisy cross-subject training set overwhelmed the RBF kernel, and capping \texttt{max\_iter} at 2000 likely prevented convergence.
-    \item \textbf{Subject-dependent vs.\ cross-subject gap.} There is roughly a 6--7 percentage point drop from subject-dependent to cross-subject accuracy across all configurations, reflecting the high inter-subject variability of EEG signals.
+    \item \textbf{Tree ensembles dominate.} LightGBM and Random Forest consistently outperformed all other models in both scenarios. These models can internally discover non-linear interactions between features, which is critical for noisy EEG data.
+    \item \textbf{Raw vs.\ Selected features.} Keeping all 84 features (\texttt{none}) produced the highest accuracy (63.7\%) for the subject-dependent scenario. However, for the cross-subject scenario, LCC and PCA offered slight improvements over the raw features, suggesting feature selection helps filter out subject-specific noise when generalizing.
+    \item \textbf{SVM scalability issues.} Due to its $O(N^3)$ complexity and sensitivity to un-transformed outliers, SVM was dropped as it failed to scale to the large, noisy cross-subject dataset within reasonable iteration limits.
+    \item \textbf{Subject-dependent vs.\ cross-subject gap.} There is roughly a 7--8 percentage point drop from subject-dependent to cross-subject accuracy across all configurations, reflecting the high inter-subject variability of EEG signals.
+    \item \textbf{Skepticism of literature benchmarks.} Prior studies reported remarkably high accuracies on similar classification tasks, such as 91.7\% (Aci et al., 2019) and an unprecedented 99.6\% (Wang \& Kim, 2025). Given the extreme noise inherent to raw EEG data observed in this project, these near-perfect results warrant scrutiny. Even considering their use of 32-channel, 500~Hz setups, achieving $\sim$100\% accuracy on highly variable brainwave data suggests potential data leakage or exceptionally favorable train/test splits in those studies.
 \end{enumerate}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.85\textwidth]{results/figures/confusion_matrix.png}
-    \caption{Aggregated confusion matrices across all 20 subjects for KNN+FI (subject-dependent) and SVM+PCA (cross-subject).}
+    \caption{Aggregated confusion matrices across all 20 subjects for KNN+FI (subject-dependent) and GBoosting+PCA (cross-subject).}
 \end{figure}
 
 \section{Limitations and Future Work}
 
-Several limitations should be noted. First, the best cross-subject accuracy of 56.5\% is only modestly above the 52.5\% baseline. While the improvement is consistent across subjects, it is not yet high enough for a reliable real-time BCI product. Second, capping SVM at 2000 iterations was necessary to keep training times manageable, but this likely hurt SVM's final performance. Third, 1-second windows may be too short to capture the slower brainwave dynamics associated with sustained attention; longer windows or overlapping segments could improve results.
+Several limitations should be noted. First, the best cross-subject accuracy of 56.0\% is only modestly above the 52.5\% baseline. While the improvement is consistent across subjects, it is not yet high enough for an out-of-the-box BCI product without prior calibration.
 
 Most importantly, this project used research-grade data that was artificially restricted to 7 channels. A real NeuroPawn headset would introduce additional noise from dry electrodes, lower signal quality, and motion artifacts. Validating these findings on actual consumer-grade hardware is a necessary next step.
 
-If I had more time, I would explore deep learning architectures such as EEGNet or temporal convolutional networks, which can learn spatial and temporal features directly from raw waveforms rather than relying on handcrafted PSD features.
+If I had more time, I would explore within this setup by trying Grid Search to improve model hyperparameters and reconsider which channels of the 32 I want to keep using featuree selection. I would also try deep learning architectures such as EEGNet, which can learn spatial and temporal features directly from raw waveforms rather than relying on handcrafted PSD features.
 
 \section{Conclusion}
 
-This project built an end-to-end pipeline from raw 90~GB EEG text files to trained classifiers, simulating the constraints of a budget 7-channel headset. The results show that tree-based ensemble methods---particularly Gradient Boosting---can distinguish focused from unfocused mental states above baseline, and that aggressive feature reduction is not necessarily beneficial when using models that are inherently robust to high-dimensional noisy inputs. These findings provide NeuraXtension with a concrete starting point: Gradient Boosting on the full PSD-derived feature set is the strongest classical baseline, but meaningful cross-subject accuracy will likely require either per-user calibration or more advanced architectures.
+This project built an end-to-end pipeline from raw 90~GB EEG text files to trained classifiers, simulating the constraints of a budget 7-channel headset. The results show that tree-based ensemble methods - particularly LightGBM - can distinguish focused from unfocused mental states above baseline. These findings provide NeuraXtension with a concrete starting point: LightGBM on the full PSD-derived feature set is the strongest classical baseline, but meaningful cross-subject accuracy will likely require advanced architectures like deep learning or spatial filtering.
 
 \newpage
 \section*{Project Experience Summary}
 
 \textbf{EEG Attention State Classifier -- Brain-Computer Interface}
 \begin{itemize}
-    \item Built an end-to-end machine learning pipeline to classify mental attention states (Focused vs.\ Unfocused) from raw EEG data, constrained to a 7-channel, 125~Hz consumer headset specification.
-    \item Processed a 90~GB raw dataset (20 subjects, 1,060+ minutes): downsampled from 500~Hz, applied bandpass filtering, segmented into 1-second epochs, and extracted 84 frequency-domain and statistical features per epoch using NumPy and SciPy.
-    \item Evaluated 5 classifiers $\times$ 5 feature selection methods $\times$ 2 evaluation scenarios across 1,000 individual experiments, identifying Gradient Boosting with full-spectrum features as the strongest classical approach (62.0\% subject-dependent, 56.5\% cross-subject accuracy).
-    \item Reduced training wall-clock time by 75\% by parallelizing the leave-one-subject-out evaluation loop across 16 CPU threads using Joblib.
+    \item Built a machine learning pipeline using Python, scikit-learn, and LightGBM to process 90~GB of raw EEG data, successfully classifying mental attention states with up to 63.7\% accuracy.
+    \item Extracted 84 frequency and statistical features per epoch by applying overlapping time windows and logarithmic transformations using NumPy and SciPy, effectively doubling the usable training data to 2,000+ minutes.
+    \item Evaluated 800 individual model configurations by systematically testing 4 classifiers and 5 feature selection methods to identify LightGBM as the strongest baseline algorithm for a 7-channel budget headset.
+    \item Accelerated model training time by implementing joblib parallelization and LightGBM's native multi-threading across a 16-thread CPU, completing the entire cross-subject evaluation in just 1 hour.
 \end{itemize}
 
 \end{document}

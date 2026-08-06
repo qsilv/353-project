@@ -19,11 +19,11 @@ from scipy import stats
 from sklearn.pipeline import Pipeline, make_pipeline
 from joblib import Parallel, delayed
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from lightgbm import LGBMClassifier
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -35,12 +35,15 @@ FEATURE_METHODS = ['none', 'anova', 'fi', 'lcc', 'pca']
 
 def get_models():
     """dictionary of models so i can train from scratch."""
+    # SVM removed: scored below baseline on cross-subject (49.5%) and had
+    # the longest training time even with max_iter capped at 2000
     return {
-        'SVM': SVC(kernel='rbf', C=1.0, probability=False, max_iter=2000, random_state=42),
         'KNN': KNeighborsClassifier(n_neighbors=5),
         'RF': RandomForestClassifier(n_estimators=100, criterion='entropy', random_state=42, n_jobs=-1),
         'DT': DecisionTreeClassifier(criterion='entropy', random_state=42),
-        'GBoosting': GradientBoostingClassifier(n_estimators=100, random_state=42)
+        # LGBMClassifier replaces sklearn GradientBoostingClassifier: same algorithm
+        # but 5-10x faster (has multithreading and other stuff)
+        'GBoosting': LGBMClassifier(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
     }
 
 # --- main process ---
@@ -71,7 +74,7 @@ def evaluate_single_subject(i, test_subject, subject_names, all_subjects_data):
     most_common_cross = stats.mode(y_train_cross, keepdims=True)[0][0]
     baseline_acc_cross = np.mean(y_test_cross == most_common_cross)
     
-    # prepare cross-subject raw features (i must use 'none' which has all 84 features)
+    # prepare cross-subject raw features (i must use 'none' which has all features)
     X_test_cross_raw = subject_data['X_combined_none']
     X_train_cross_list = []
     for other_subj in subject_names:
@@ -94,10 +97,17 @@ def evaluate_single_subject(i, test_subject, subject_names, all_subjects_data):
             X_train_cross = X_train_cross_raw
             X_test_cross = X_test_cross_raw
         elif method == 'anova':
-            from sklearn.feature_selection import SelectKBest, f_classif
-            selector = SelectKBest(f_classif, k=30)
-            X_train_cross = selector.fit_transform(X_train_cross_raw, y_train_cross)
-            X_test_cross = selector.transform(X_test_cross_raw)
+            # changed from SelectKBest(k=30) to p<=0.05 threshold to match
+            # the approach used in feature_extraction.py (was previously inconsistent)
+            from sklearn.feature_selection import f_classif as f_classif_fn
+            f_scores, p_values = f_classif_fn(X_train_cross_raw, y_train_cross)
+            mask = p_values <= 0.05
+            if not np.any(mask):
+                best_10 = np.argsort(p_values)[:10]
+                mask = np.zeros(len(p_values), dtype=bool)
+                mask[best_10] = True
+            X_train_cross = X_train_cross_raw[:, mask]
+            X_test_cross = X_test_cross_raw[:, mask]
         elif method == 'fi':
             rf = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
             rf.fit(X_train_cross_raw, y_train_cross)
@@ -107,7 +117,10 @@ def evaluate_single_subject(i, test_subject, subject_names, all_subjects_data):
             X_train_cross = X_train_cross_raw[:, mask]
             X_test_cross = X_test_cross_raw[:, mask]
         elif method == 'lcc':
-            corrs = np.array([abs(np.corrcoef(X_train_cross_raw[:, i], y_train_cross)[0, 1]) for i in range(84)])
+            # lcc checks the correlation of each feature against the label.
+            # features with higher than average correlation are kept.
+            num_features = X_train_cross_raw.shape[1]
+            corrs = np.array([abs(np.corrcoef(X_train_cross_raw[:, i], y_train_cross)[0, 1]) for i in range(num_features)])
             corrs = np.nan_to_num(corrs)
             mask = corrs >= np.mean(corrs)
             X_train_cross = X_train_cross_raw[:, mask]
@@ -191,7 +204,7 @@ def evaluate_single_subject(i, test_subject, subject_names, all_subjects_data):
             })
             
             # save matrix for visualization later
-            if model_name == 'SVM' and method == 'pca':
+            if model_name == 'GBoosting' and method == 'pca':
                 matrix = confusion_matrix(y_test_cross, predictions_cross)
                 saved_matrices[f"{test_subject}_cross"] = matrix
                 

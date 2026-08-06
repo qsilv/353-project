@@ -117,7 +117,7 @@ def draw_confusion_matrices():
             xticklabels=['Unfocused', 'Focused'], yticklabels=['Unfocused', 'Focused'],
             ax=ax2
         )
-        ax2.set_title('Cross-Subject (SVM + PCA)', pad=15)
+        ax2.set_title('Cross-Subject (GBoosting + PCA)', pad=15)
         ax2.set_ylabel('What the person was actually doing')
         ax2.set_xlabel('What the AI guessed')
     

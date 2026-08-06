@@ -48,8 +48,8 @@ def calculate_power_for_band(frequencies, power_spectrum, min_freq, max_freq):
 
 def extract_features_for_one_window(window_data, sampling_rate):
     """
-    calculates all 84 features for a single 1-second chunk of eeg data.
-    there are 7 channels, and i calculate 12 features per channel.
+    calculates all 96 features for a single 1-second chunk of eeg data.
+    there are 8 channels, and i calculate 12 features per channel.
     
     reference (paper 1): this extraction of statistical and frequency band 
     power features is derived from aci et al. (2019) "svm-based eeg attention classification".
@@ -62,7 +62,9 @@ def extract_features_for_one_window(window_data, sampling_rate):
         
         # 1. calculate the frequency power spectrum using welch's method
         # frequencies is a 1d array of the frequencies, power_spectrum is a 1d array of the power at each frequency
-        frequencies, power_spectrum = signal.welch(channel_data, sampling_rate, nperseg=sampling_rate)
+        # nperseg=sampling_rate//2 (64) instead of sampling_rate (125) so welch can average
+        # over ~3 overlapping segments for noise reduction (previously used entire window as 1 segment)
+        frequencies, power_spectrum = signal.welch(channel_data, sampling_rate, nperseg=sampling_rate // 2)
         
         # calculate power for each brain wave band
         #this extracts the relative power of each brain wave band using the 2 arrays from welch
@@ -88,11 +90,13 @@ def extract_features_for_one_window(window_data, sampling_rate):
         kurtosis = stats.kurtosis(channel_data)
         
         # add all 12 features for this channel to my list
-        features_list.append(delta_power)
-        features_list.append(theta_power)
-        features_list.append(alpha_power)
-        features_list.append(beta_power)
-        features_list.append(gamma_power)
+        # log1p compresses the heavy-tailed power distribution so outliers don't
+        # dominate during scaling, mainly helps SVM/KNN (trees are unaffected)
+        features_list.append(np.log1p(delta_power))
+        features_list.append(np.log1p(theta_power))
+        features_list.append(np.log1p(alpha_power))
+        features_list.append(np.log1p(beta_power))
+        features_list.append(np.log1p(gamma_power))
         features_list.append(alpha_beta_ratio)
         features_list.append(theta_beta_ratio)
         features_list.append(theta_alpha_ratio)
@@ -242,7 +246,7 @@ def main():
     
     for file in subject_files:
         subject_name = file.replace('.npz', '')
-        print(f"\nProcessing {subject_name}...")
+        print(f"\nProcessing {subject_name}")
         
         # load the data (stored as numpy arrays in the previous step)
         data = np.load(os.path.join(INPUT_FOLDER, file))
@@ -252,8 +256,8 @@ def main():
         y_test = data['y_test']
         sampling_rate = int(data['fs'])
         
-        # 1. calculate the base 84 features
-        print("  Calculating 84 base features...")
+        # 1. calculate the base 96 features
+        print("  Calculating 96 base features")
         train_features = process_all_windows(X_train_raw, sampling_rate)
         test_features = process_all_windows(X_test_raw, sampling_rate)
         

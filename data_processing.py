@@ -23,9 +23,10 @@ ORIGINAL_HZ = 500
 TARGET_HZ = 125
 DOWNSAMPLE_FACTOR = 4
 
-# the 7 channels i are using based on the research papers
-CHANNEL_COLUMNS = [2, 3, 4, 12, 13, 14, 23]
-CHANNEL_NAMES = ['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz']
+# the 8 optimized channels based on visual attention research
+# dropped Cz and added O1/O2 (occipital) for visual cortex coverage
+CHANNEL_COLUMNS = [2, 3, 4, 12, 14, 23, 26, 28]
+CHANNEL_NAMES = ['F3', 'Fz', 'F4', 'C3', 'C4', 'Pz', 'O1', 'O2']
 
 # a 1-second window at 125 hz means 125 samples
 SAMPLES_PER_WINDOW = 125
@@ -82,20 +83,22 @@ def filter_data(eeg_data):
 
 def cut_into_windows(eeg_data):
     """
-    cuts the continuous eeg data into 1 second chunks.
+    cuts the continuous eeg data into 1 second chunks with 50% overlap.
+    the overlap roughly doubles the number of windows and captures events
+    that would otherwise fall on window boundaries.
     drops any leftover data at the end that doesn't fit into a full second.
     """
     num_samples = eeg_data.shape[0]
-    num_channels = eeg_data.shape[1]
     
-    num_full_windows = num_samples // SAMPLES_PER_WINDOW
+    # changed from non-overlapping (step=125) to 50% overlap (step=62)
+    # this approx doubles training data and captures events split across window boundaries
+    step = SAMPLES_PER_WINDOW // 2
     
-    # cut off the extra samples at the end
-    total_samples_to_keep = num_full_windows * SAMPLES_PER_WINDOW
-    trimmed_data = eeg_data[0:total_samples_to_keep, :]
+    windows_list = []
+    for start in range(0, num_samples - SAMPLES_PER_WINDOW + 1, step):
+        windows_list.append(eeg_data[start:start + SAMPLES_PER_WINDOW, :])
     
-    # reshape it so it is (windows, 125, 7)
-    windows = trimmed_data.reshape(num_full_windows, SAMPLES_PER_WINDOW, num_channels)
+    windows = np.array(windows_list)
     
     return windows
 

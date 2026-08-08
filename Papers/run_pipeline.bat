@@ -1,0 +1,19 @@
+@echo off
+echo Activating Anaconda Environment...
+call C:\Users\mfath\anaconda3\Scripts\activate.bat C:\Users\mfath\anaconda3
+
+echo Starting Full EEG Pipeline...
+
+echo [1/4] Processing Data...
+python data_processing.py
+
+echo [2/4] Extracting Features...
+python feature_extraction.py
+
+echo [3/4] Training Models...
+python model_training.py
+
+echo [4/4] Generating Visualizations...
+python visualization.py
+
+echo Pipeline Complete!
